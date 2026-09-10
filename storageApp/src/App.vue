@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
+import ApiRequester from './components/ApiRequester.vue'
 </script>
 
 <template>
-  <HelloWorld />
+  <ApiRequester />
 </template>
