@@ -19,28 +19,30 @@ export class ProductsController {
   }
 
   @Post('create')
-  create(@Body() createProductParams: CreateProductDto) {
-    return this.productService.create(createProductParams);
+  async create(@Body() createProductParams: CreateProductDto) {
+    return await this.productService.create(createProductParams);
   }
 
   @Post('findById')
-  findById(@Body() findByIdParams: findByIdDto) {
-    return this.productService.findById(findByIdParams.productNo);
+  async findById(@Body() findByIdParams: findByIdDto) {
+    return await this.productService.findById(findByIdParams.productNo);
   }
 
   @Post('updateProductName')
-  updateProductName(@Body() updateProductNameParams: updateProductNameDto) {
-    return this.productService.updateProductName(
+  async updateProductName(
+    @Body() updateProductNameParams: updateProductNameDto,
+  ) {
+    return await this.productService.updateProductName(
       updateProductNameParams.productNo,
       updateProductNameParams.name,
     );
   }
 
   @Post('updateProductQuantity')
-  updateProductQuantity(
+  async updateProductQuantity(
     @Body() updateProductQuantityParams: updateProductQuantityDto,
   ) {
-    return this.productService.updateProductQuantity(
+    return await this.productService.updateProductQuantity(
       updateProductQuantityParams.productNo,
       updateProductQuantityParams.quantity,
     );
