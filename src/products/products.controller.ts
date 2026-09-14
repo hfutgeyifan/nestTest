@@ -14,8 +14,8 @@ export class ProductsController {
   constructor(private productService: ProductsService) {}
 
   @Post('getAllProducts')
-  findAll(): Product[] {
-    return this.productService.findAll();
+  async findAll(): Promise<Product[]> {
+    return await this.productService.findAll();
   }
 
   @Post('create')

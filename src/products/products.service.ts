@@ -11,49 +11,52 @@ export class ProductsService {
     private productsRepository: Repository<Products>,
   ) {}
 
-  private readonly products: Record<string, Product> = {};
-
-  create(product: Product) {
-    const findProduct = this.products[product.productNo];
+  async create(product: Product) {
+    const findProduct = await this.productsRepository.findOneBy({
+      productNo: product.productNo,
+    });
     if (findProduct) {
       throw new HttpException('alreadyExist', HttpStatus.CONFLICT);
     }
-    this.products[product.productNo] = product;
+    return await this.productsRepository.insert(product);
   }
 
-  findAll() {
-    return Object.values(this.products);
+  async findAll() {
+    return await this.productsRepository.find();
   }
 
-  findById(productNo: string): Product {
-    const findProduct = this.products[productNo];
+  async findById(productNo: string): Promise<Products> {
+    const findProduct = await this.productsRepository.findOneBy({ productNo });
     if (findProduct) {
       return findProduct;
     }
     throw new HttpException('notFound', HttpStatus.INTERNAL_SERVER_ERROR);
   }
 
-  updateProductName(productNo: string, name: string) {
-    const findProduct = this.products[productNo];
+  async updateProductName(productNo: string, name: string) {
+    const findProduct = await this.productsRepository.findOneBy({ productNo });
     if (findProduct) {
-      return (this.products[productNo].name = name);
+      return await this.productsRepository.update({ productNo }, { name });
     }
     throw new HttpException('notFound', HttpStatus.INTERNAL_SERVER_ERROR);
   }
 
-  updateProductQuantity(productNo: string, quantity: number) {
-    const findProduct = this.products[productNo];
+  async updateProductQuantity(productNo: string, quantity: number) {
+    const findProduct = await this.productsRepository.findOneBy({ productNo });
     if (findProduct) {
       if ((findProduct.quantity += quantity) < 0) {
         throw new HttpException('can not down', HttpStatus.BAD_REQUEST);
       }
-      return (this.products[productNo].quantity += quantity);
+      return await this.productsRepository.update(
+        { productNo },
+        { quantity: (findProduct.quantity += quantity) },
+      );
     }
     throw new HttpException('notFound', HttpStatus.INTERNAL_SERVER_ERROR);
   }
 
   async deleteProduct(productNo: string) {
-    const findProduct = this.products[productNo];
+    const findProduct = await this.productsRepository.findOneBy({ productNo });
     if (findProduct) {
       if (findProduct.quantity !== 0) {
         throw new HttpException(
@@ -61,7 +64,7 @@ export class ProductsService {
           HttpStatus.BAD_REQUEST,
         );
       }
-      await this.productsRepository.delete(productNo);
+      return await this.productsRepository.delete(productNo);
     }
     throw new HttpException('notFound', HttpStatus.INTERNAL_SERVER_ERROR);
   }
