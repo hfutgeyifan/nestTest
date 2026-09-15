@@ -1,8 +1,8 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryColumn } from 'typeorm';
 
 @Entity('products')
 export class Products {
-  @PrimaryGeneratedColumn()
+  @PrimaryColumn()
   productNo!: string;
 
   @Column()

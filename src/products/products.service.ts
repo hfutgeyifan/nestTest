@@ -44,12 +44,13 @@ export class ProductsService {
   async updateProductQuantity(productNo: string, quantity: number) {
     const findProduct = await this.productsRepository.findOneBy({ productNo });
     if (findProduct) {
-      if ((findProduct.quantity += quantity) < 0) {
+      const nextQuantity = findProduct.quantity + quantity;
+      if (nextQuantity < 0) {
         throw new HttpException('can not down', HttpStatus.BAD_REQUEST);
       }
       return await this.productsRepository.update(
         { productNo },
-        { quantity: (findProduct.quantity += quantity) },
+        { quantity: nextQuantity },
       );
     }
     throw new HttpException('notFound', HttpStatus.INTERNAL_SERVER_ERROR);
