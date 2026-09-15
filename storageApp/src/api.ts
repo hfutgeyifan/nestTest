@@ -124,3 +124,55 @@ export function deleteProduct(productNo: string) {
     body: JSON.stringify({ productNo }),
   });
 }
+
+export type InboundStatus = 'draft' | 'confirmed' | 'voided';
+
+export type StockInbound = {
+  id: number;
+  productNo: string;
+  productName: string;
+  quantity: number;
+  remark: string;
+  status: InboundStatus;
+  createdBy: number;
+};
+
+export function listInbounds() {
+  return request<StockInbound[]>('/stock/inbounds/list', { method: 'POST' });
+}
+
+export function createInbound(body: {
+  productNo: string;
+  quantity: number;
+  remark?: string;
+}) {
+  return request<StockInbound>('/stock/inbounds', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateInbound(body: {
+  id: number;
+  quantity?: number;
+  remark?: string;
+}) {
+  return request<StockInbound>('/stock/inbounds/update', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function confirmInbound(id: number) {
+  return request<StockInbound>('/stock/inbounds/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
+
+export function voidInbound(id: number) {
+  return request<StockInbound>('/stock/inbounds/void', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}

@@ -3,17 +3,22 @@ import { onMounted, reactive, ref } from 'vue';
 import {
   ApiError,
   clearToken,
+  confirmInbound,
+  createInbound,
   createProduct,
   deleteProduct,
   getAllProducts,
   getProfile,
   getToken,
+  listInbounds,
   login,
   register,
   setToken,
+  updateInbound,
   updateProductName,
-  updateProductQuantity,
+  voidInbound,
   type Product,
+  type StockInbound,
 } from './api';
 
 const username = ref('');
@@ -25,7 +30,9 @@ const noticeError = ref(false);
 
 const currentUser = ref('');
 const products = ref<Product[]>([]);
+const inbounds = ref<StockInbound[]>([]);
 const loading = ref(false);
+const inboundLoading = ref(false);
 
 const createForm = reactive({
   productNo: '',
@@ -33,8 +40,15 @@ const createForm = reactive({
   quantity: 0,
 });
 
-const drafts = ref<
-  Record<string, { name: string; delta: number; busy: boolean }>
+const inboundForm = reactive({
+  productNo: '',
+  quantity: 5,
+  remark: '深圳供应商到货',
+});
+
+const drafts = ref<Record<string, { name: string; busy: boolean }>>({});
+const inboundDrafts = ref<
+  Record<number, { quantity: number; remark: string; busy: boolean }>
 >({});
 
 function showNotice(message: string, isError = false) {
@@ -67,11 +81,13 @@ async function loadProducts() {
       const key = productKey(product);
       nextDrafts[key] = {
         name: product.name,
-        delta: drafts.value[key]?.delta ?? 1,
         busy: false,
       };
     }
     drafts.value = nextDrafts;
+    if (!inboundForm.productNo && products.value[0]) {
+      inboundForm.productNo = products.value[0].productNo;
+    }
   } catch (error) {
     showNotice(
       error instanceof Error ? error.message : '加载商品失败',
@@ -90,7 +106,7 @@ async function restoreSession() {
   try {
     const profile = await getProfile();
     currentUser.value = profile.username;
-    await loadProducts();
+    await Promise.all([loadProducts(), loadInbounds()]);
   } catch {
     currentUser.value = '';
   }
@@ -112,7 +128,7 @@ async function submitAuth() {
     currentUser.value = username.value.trim();
     password.value = '';
     showNotice(authMode.value === 'register' ? '注册并登录成功' : '登录成功');
-    await loadProducts();
+    await Promise.all([loadProducts(), loadInbounds()]);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '登录失败', true);
   } finally {
@@ -124,6 +140,7 @@ function logout() {
   clearToken();
   currentUser.value = '';
   products.value = [];
+  inbounds.value = [];
   showNotice('已退出登录');
 }
 
@@ -139,10 +156,11 @@ async function submitCreate() {
       name: createForm.name.trim(),
       quantity: Number(createForm.quantity) || 0,
     });
+    showNotice('商品已创建');
+    inboundForm.productNo = createForm.productNo.trim() || inboundForm.productNo;
     createForm.productNo = '';
     createForm.name = '';
     createForm.quantity = 0;
-    showNotice('商品已创建');
     await loadProducts();
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '创建失败', true);
@@ -168,20 +186,6 @@ async function saveName(product: Product) {
   }
 }
 
-async function changeQuantity(product: Product, delta: number) {
-  const draft = ensureDraft(product);
-  draft.busy = true;
-  try {
-    await updateProductQuantity(product.productNo, delta);
-    showNotice(delta > 0 ? `库存 +${delta}` : `库存 ${delta}`);
-    await loadProducts();
-  } catch (error) {
-    showNotice(error instanceof Error ? error.message : '改库存失败', true);
-  } finally {
-    draft.busy = false;
-  }
-}
-
 async function removeProduct(product: Product) {
   const draft = ensureDraft(product);
   draft.busy = true;
@@ -191,6 +195,124 @@ async function removeProduct(product: Product) {
     await loadProducts();
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '删除失败', true);
+  } finally {
+    draft.busy = false;
+  }
+}
+
+function inboundStatusText(status: StockInbound['status']) {
+  if (status === 'draft') return '草稿';
+  if (status === 'confirmed') return '已确认';
+  return '已作废';
+}
+
+function ensureInboundDraft(inbound: StockInbound) {
+  if (!inboundDrafts.value[inbound.id]) {
+    inboundDrafts.value[inbound.id] = {
+      quantity: inbound.quantity,
+      remark: inbound.remark,
+      busy: false,
+    };
+  }
+  return inboundDrafts.value[inbound.id];
+}
+
+async function loadInbounds() {
+  inboundLoading.value = true;
+  try {
+    const list = await listInbounds();
+    inbounds.value = list;
+    const nextDrafts: typeof inboundDrafts.value = {};
+    for (const inbound of list) {
+      nextDrafts[inbound.id] = {
+        quantity: inbound.quantity,
+        remark: inbound.remark,
+        busy: false,
+      };
+    }
+    inboundDrafts.value = nextDrafts;
+  } catch (error) {
+    showNotice(
+      error instanceof Error ? error.message : '加载入库单失败',
+      true,
+    );
+    if (error instanceof ApiError && error.status === 401) {
+      currentUser.value = '';
+    }
+  } finally {
+    inboundLoading.value = false;
+  }
+}
+
+async function submitInbound() {
+  if (!inboundForm.productNo) {
+    showNotice('请选择商品', true);
+    return;
+  }
+  if (!Number.isInteger(inboundForm.quantity) || inboundForm.quantity < 1) {
+    showNotice('入库件数必须大于 0', true);
+    return;
+  }
+
+  try {
+    await createInbound({
+      productNo: inboundForm.productNo,
+      quantity: inboundForm.quantity,
+      remark: inboundForm.remark.trim(),
+    });
+    showNotice('入库单已开为草稿');
+    await loadInbounds();
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '开单失败', true);
+  }
+}
+
+async function saveInbound(inbound: StockInbound) {
+  const draft = ensureInboundDraft(inbound);
+  if (!Number.isInteger(draft.quantity) || draft.quantity < 1) {
+    showNotice('入库件数必须大于 0', true);
+    return;
+  }
+
+  draft.busy = true;
+  try {
+    await updateInbound({
+      id: inbound.id,
+      quantity: draft.quantity,
+      remark: draft.remark,
+    });
+    showNotice('草稿已保存');
+    await loadInbounds();
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '保存失败', true);
+  } finally {
+    draft.busy = false;
+  }
+}
+
+async function confirmInboundOrder(inbound: StockInbound) {
+  const draft = ensureInboundDraft(inbound);
+  draft.busy = true;
+  try {
+    await confirmInbound(inbound.id);
+    showNotice('入库单已确认，库存已增加');
+    await Promise.all([loadProducts(), loadInbounds()]);
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '确认失败', true);
+  } finally {
+    draft.busy = false;
+  }
+}
+
+async function voidInboundOrder(inbound: StockInbound) {
+  const draft = ensureInboundDraft(inbound);
+  draft.busy = true;
+  try {
+    await voidInbound(inbound.id);
+    showNotice('入库单已作废');
+    await loadInbounds();
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '作废失败', true);
   } finally {
     draft.busy = false;
   }
@@ -206,7 +328,7 @@ onMounted(() => {
     <header class="topbar">
       <div>
         <h1>仓储库存</h1>
-        <p>注册登录后管理商品和库存</p>
+        <p>登录后开入库单，确认后库存才增加</p>
       </div>
       <div v-if="currentUser" class="user">
         <span>{{ currentUser }}</span>
@@ -270,7 +392,7 @@ onMounted(() => {
           </label>
           <label>
             名称
-            <input v-model="createForm.name" type="text" placeholder="苹果" />
+            <input v-model="createForm.name" type="text" placeholder="黑色蓝牙耳机" />
           </label>
           <label>
             初始库存
@@ -310,29 +432,6 @@ onMounted(() => {
             >
               改名
             </button>
-            <input
-              v-model.number="ensureDraft(product).delta"
-              class="delta"
-              type="number"
-              min="1"
-              :disabled="ensureDraft(product).busy"
-            />
-            <button
-              type="button"
-              class="ghost"
-              :disabled="ensureDraft(product).busy"
-              @click="changeQuantity(product, ensureDraft(product).delta || 1)"
-            >
-              入库
-            </button>
-            <button
-              type="button"
-              class="ghost"
-              :disabled="ensureDraft(product).busy"
-              @click="changeQuantity(product, -(ensureDraft(product).delta || 1))"
-            >
-              出库
-            </button>
             <button
               type="button"
               class="ghost ghost--danger"
@@ -341,6 +440,113 @@ onMounted(() => {
             >
               删除
             </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>开入库单</h2>
+        <p class="hint">草稿不改库存；确认后才会给商品加数量，且不能再改件数。</p>
+        <form class="form form--row" @submit.prevent="submitInbound">
+          <label>
+            商品
+            <select v-model="inboundForm.productNo">
+              <option disabled value="">请选择商品</option>
+              <option
+                v-for="product in products"
+                :key="product.productNo"
+                :value="product.productNo"
+              >
+                {{ product.name }}（{{ product.productNo }}）
+              </option>
+            </select>
+          </label>
+          <label>
+            件数
+            <input v-model.number="inboundForm.quantity" type="number" min="1" />
+          </label>
+          <label>
+            备注
+            <input
+              v-model="inboundForm.remark"
+              type="text"
+              placeholder="深圳供应商到货"
+            />
+          </label>
+          <button class="primary" type="submit">开草稿单</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel__title">
+          <h2>我的入库单</h2>
+          <button
+            type="button"
+            class="ghost"
+            :disabled="inboundLoading"
+            @click="loadInbounds"
+          >
+            {{ inboundLoading ? '刷新中…' : '刷新' }}
+          </button>
+        </div>
+
+        <p v-if="!inbounds.length && !inboundLoading" class="empty">
+          还没有入库单，先开一张草稿。
+        </p>
+
+        <div v-for="inbound in inbounds" :key="inbound.id" class="product">
+          <div class="product__meta">
+            <strong>
+              {{ inbound.productName }} ·
+              {{ inboundStatusText(inbound.status) }}
+            </strong>
+            <span>
+              单号 {{ inbound.id }} · {{ inbound.productNo }} ·
+              {{ inbound.quantity }} 件
+              <template v-if="inbound.remark"> · {{ inbound.remark }}</template>
+            </span>
+          </div>
+
+          <div v-if="inbound.status === 'draft'" class="product__actions">
+            <input
+              v-model.number="ensureInboundDraft(inbound).quantity"
+              class="delta"
+              type="number"
+              min="1"
+              :disabled="ensureInboundDraft(inbound).busy"
+            />
+            <input
+              v-model="ensureInboundDraft(inbound).remark"
+              type="text"
+              :disabled="ensureInboundDraft(inbound).busy"
+            />
+            <button
+              type="button"
+              class="ghost"
+              :disabled="ensureInboundDraft(inbound).busy"
+              @click="saveInbound(inbound)"
+            >
+              保存
+            </button>
+            <button
+              type="button"
+              class="primary"
+              :disabled="ensureInboundDraft(inbound).busy"
+              @click="confirmInboundOrder(inbound)"
+            >
+              确认入库
+            </button>
+            <button
+              type="button"
+              class="ghost ghost--danger"
+              :disabled="ensureInboundDraft(inbound).busy"
+              @click="voidInboundOrder(inbound)"
+            >
+              作废
+            </button>
+          </div>
+          <div v-else class="product__actions">
+            <span class="readonly">只能查看</span>
           </div>
         </div>
       </section>
@@ -424,7 +630,8 @@ onMounted(() => {
 .tabs button,
 .ghost,
 .primary,
-input {
+input,
+select {
   font: inherit;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -478,8 +685,19 @@ label {
   min-width: 140px;
 }
 
-input {
+input,
+select {
   padding: 8px 10px;
+}
+
+.hint,
+.readonly {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.hint {
+  margin: 0 0 12px;
 }
 
 .delta {
