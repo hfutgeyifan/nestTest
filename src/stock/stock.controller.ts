@@ -12,6 +12,11 @@ import {
   InboundIdDto,
   UpdateInboundDto,
 } from './dto/stock-inbound.dto';
+import {
+  CreateOutboundDto,
+  OutboundIdDto,
+  UpdateOutboundDto,
+} from './dto/stock-outbound.dto';
 import { StockService } from './stock.service';
 
 @Controller('stock')
@@ -45,5 +50,40 @@ export class StockController {
   @Post('inbounds/void')
   voidDraft(@Request() req: RequestWithUser, @Body() dto: InboundIdDto) {
     return this.stockService.voidDraft(req.user.sub, dto.id);
+  }
+
+  @Post('outbounds')
+  createOutbound(
+    @Request() req: RequestWithUser,
+    @Body() dto: CreateOutboundDto,
+  ) {
+    return this.stockService.createOutbound(req.user.sub, dto);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('outbounds/list')
+  listOutbounds(@Request() req: RequestWithUser) {
+    return this.stockService.findMyOutbounds(req.user.sub);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('outbounds/update')
+  updateOutbound(
+    @Request() req: RequestWithUser,
+    @Body() dto: UpdateOutboundDto,
+  ) {
+    return this.stockService.updateOutboundDraft(req.user.sub, dto);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('outbounds/confirm')
+  confirmOutbound(@Request() req: RequestWithUser, @Body() dto: OutboundIdDto) {
+    return this.stockService.confirmOutbound(req.user.sub, dto.id);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('outbounds/void')
+  voidOutbound(@Request() req: RequestWithUser, @Body() dto: OutboundIdDto) {
+    return this.stockService.voidOutboundDraft(req.user.sub, dto.id);
   }
 }

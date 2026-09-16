@@ -7,10 +7,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { StockModule } from './stock/stock.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
     HealthModule,
+    RedisModule,
     ProductsModule,
     TypeOrmModule.forRoot({
       type: 'mysql',

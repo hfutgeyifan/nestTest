@@ -176,3 +176,55 @@ export function voidInbound(id: number) {
     body: JSON.stringify({ id }),
   });
 }
+
+export type OutboundStatus = 'draft' | 'confirmed' | 'voided';
+
+export type StockOutbound = {
+  id: number;
+  productNo: string;
+  productName: string;
+  quantity: number;
+  orderNo: string;
+  status: OutboundStatus;
+  createdBy: number;
+};
+
+export function listOutbounds() {
+  return request<StockOutbound[]>('/stock/outbounds/list', { method: 'POST' });
+}
+
+export function createOutbound(body: {
+  productNo: string;
+  quantity: number;
+  orderNo: string;
+}) {
+  return request<StockOutbound>('/stock/outbounds', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateOutbound(body: {
+  id: number;
+  quantity?: number;
+  orderNo?: string;
+}) {
+  return request<StockOutbound>('/stock/outbounds/update', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function confirmOutbound(id: number) {
+  return request<StockOutbound>('/stock/outbounds/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
+
+export function voidOutbound(id: number) {
+  return request<StockOutbound>('/stock/outbounds/void', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
