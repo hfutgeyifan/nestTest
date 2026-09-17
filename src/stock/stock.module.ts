@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ProductsModule } from '../products/products.module';
+import { ProductLocation } from './entities/product-location.entity';
+import { Shelf } from './entities/shelf.entity';
 import { StockInbound } from './entities/stock-inbound.entity';
 import { StockOutbound } from './entities/stock-outbound.entity';
 import { StockController } from './stock.controller';
@@ -8,7 +10,12 @@ import { StockService } from './stock.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([StockInbound, StockOutbound]),
+    TypeOrmModule.forFeature([
+      StockInbound,
+      StockOutbound,
+      Shelf,
+      ProductLocation,
+    ]),
     ProductsModule,
   ],
   controllers: [StockController],

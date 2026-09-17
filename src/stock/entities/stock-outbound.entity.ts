@@ -26,6 +26,9 @@ export class StockOutbound {
   @Column()
   orderNo!: string;
 
+  @Column({ default: '' })
+  shelfName!: string;
+
   @Column({ default: OUTBOUND_STATUS.DRAFT })
   status!: OutboundStatus;
 

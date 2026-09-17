@@ -14,15 +14,22 @@ import {
   getToken,
   listInbounds,
   listOutbounds,
+  listProductLocations,
+  listShelves,
+  locationsByShelf,
   login,
   register,
   setToken,
+  transferStock,
   updateInbound,
   updateOutbound,
   updateProductName,
   voidInbound,
   voidOutbound,
   type Product,
+  type ProductLocations,
+  type Shelf,
+  type ShelfContents,
   type StockInbound,
   type StockOutbound,
 } from './api';
@@ -36,21 +43,25 @@ const noticeError = ref(false);
 
 const currentUser = ref('');
 const products = ref<Product[]>([]);
+const locations = ref<ProductLocations[]>([]);
+const shelves = ref<Shelf[]>([]);
+const shelfView = ref<ShelfContents | null>(null);
 const inbounds = ref<StockInbound[]>([]);
 const outbounds = ref<StockOutbound[]>([]);
 const loading = ref(false);
 const inboundLoading = ref(false);
 const outboundLoading = ref(false);
+const transferBusy = ref(false);
 
 const createForm = reactive({
   productNo: '',
   name: '',
-  quantity: 0,
 });
 
 const inboundForm = reactive({
   productNo: '',
-  quantity: 5,
+  quantity: 10,
+  shelfName: 'A区-01',
   remark: '深圳供应商到货',
 });
 
@@ -58,14 +69,30 @@ const outboundForm = reactive({
   productNo: '',
   quantity: 5,
   orderNo: 'ORD-1001',
+  shelfName: 'A区-01',
 });
+
+const transferForm = reactive({
+  productNo: '',
+  fromShelf: 'A区-01',
+  toShelf: 'B区-03',
+  quantity: 4,
+});
+
+const shelfQuery = ref('A区-01');
 
 const drafts = ref<Record<string, { name: string; busy: boolean }>>({});
 const inboundDrafts = ref<
-  Record<number, { quantity: number; remark: string; busy: boolean }>
+  Record<
+    number,
+    { quantity: number; remark: string; shelfName: string; busy: boolean }
+  >
 >({});
 const outboundDrafts = ref<
-  Record<number, { quantity: number; orderNo: string; busy: boolean }>
+  Record<
+    number,
+    { quantity: number; orderNo: string; shelfName: string; busy: boolean }
+  >
 >({});
 
 function showNotice(message: string, isError = false) {
@@ -108,6 +135,9 @@ async function loadProducts() {
     if (!outboundForm.productNo && products.value[0]) {
       outboundForm.productNo = products.value[0].productNo;
     }
+    if (!transferForm.productNo && products.value[0]) {
+      transferForm.productNo = products.value[0].productNo;
+    }
   } catch (error) {
     showNotice(
       error instanceof Error ? error.message : '加载商品失败',
@@ -126,10 +156,41 @@ async function restoreSession() {
   try {
     const profile = await getProfile();
     currentUser.value = profile.username;
-    await Promise.all([loadProducts(), loadInbounds(), loadOutbounds()]);
+    await Promise.all([
+      loadProducts(),
+      loadShelves(),
+      loadLocations(),
+      loadInbounds(),
+      loadOutbounds(),
+    ]);
   } catch {
     currentUser.value = '';
   }
+}
+
+async function loadShelves() {
+  shelves.value = await listShelves();
+  if (shelves.value[0]) {
+    if (!inboundForm.shelfName) inboundForm.shelfName = shelves.value[0].name;
+    if (!outboundForm.shelfName) outboundForm.shelfName = shelves.value[0].name;
+    if (!transferForm.fromShelf) transferForm.fromShelf = shelves.value[0].name;
+    if (!shelfQuery.value) shelfQuery.value = shelves.value[0].name;
+    if (shelves.value[1] && !transferForm.toShelf) {
+      transferForm.toShelf = shelves.value[1].name;
+    }
+  }
+}
+
+async function loadLocations() {
+  locations.value = await listProductLocations();
+}
+
+function shelvesText(productNo: string) {
+  const row = locations.value.find((item) => item.productNo === productNo);
+  if (!row || !row.shelves.length) return '未上架';
+  return row.shelves
+    .map((shelf) => `${shelf.shelfName}=${shelf.quantity}`)
+    .join('，');
 }
 
 async function submitAuth() {
@@ -148,7 +209,13 @@ async function submitAuth() {
     currentUser.value = username.value.trim();
     password.value = '';
     showNotice(authMode.value === 'register' ? '注册并登录成功' : '登录成功');
-    await Promise.all([loadProducts(), loadInbounds(), loadOutbounds()]);
+    await Promise.all([
+      loadProducts(),
+      loadShelves(),
+      loadLocations(),
+      loadInbounds(),
+      loadOutbounds(),
+    ]);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '登录失败', true);
   } finally {
@@ -160,8 +227,10 @@ function logout() {
   clearToken();
   currentUser.value = '';
   products.value = [];
+  locations.value = [];
   inbounds.value = [];
   outbounds.value = [];
+  shelfView.value = null;
   showNotice('已退出登录');
 }
 
@@ -175,16 +244,17 @@ async function submitCreate() {
     await createProduct({
       productNo: createForm.productNo.trim(),
       name: createForm.name.trim(),
-      quantity: Number(createForm.quantity) || 0,
+      quantity: 0,
     });
-    showNotice('商品已创建');
+    showNotice('商品已创建，请开入库单上架');
     inboundForm.productNo = createForm.productNo.trim() || inboundForm.productNo;
     outboundForm.productNo =
       createForm.productNo.trim() || outboundForm.productNo;
+    transferForm.productNo =
+      createForm.productNo.trim() || transferForm.productNo;
     createForm.productNo = '';
     createForm.name = '';
-    createForm.quantity = 0;
-    await loadProducts();
+    await Promise.all([loadProducts(), loadLocations()]);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '创建失败', true);
   }
@@ -215,7 +285,7 @@ async function removeProduct(product: Product) {
   try {
     await deleteProduct(product.productNo);
     showNotice('商品已删除');
-    await loadProducts();
+    await Promise.all([loadProducts(), loadLocations()]);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '删除失败', true);
   } finally {
@@ -234,6 +304,7 @@ function ensureInboundDraft(inbound: StockInbound) {
     inboundDrafts.value[inbound.id] = {
       quantity: inbound.quantity,
       remark: inbound.remark,
+      shelfName: inbound.shelfName || inboundForm.shelfName,
       busy: false,
     };
   }
@@ -250,6 +321,7 @@ async function loadInbounds() {
       nextDrafts[inbound.id] = {
         quantity: inbound.quantity,
         remark: inbound.remark,
+        shelfName: inbound.shelfName || inboundForm.shelfName,
         busy: false,
       };
     }
@@ -281,6 +353,7 @@ async function submitInbound() {
     await createInbound({
       productNo: inboundForm.productNo,
       quantity: inboundForm.quantity,
+      shelfName: inboundForm.shelfName,
       remark: inboundForm.remark.trim(),
     });
     showNotice('入库单已开为草稿');
@@ -302,6 +375,7 @@ async function saveInbound(inbound: StockInbound) {
     await updateInbound({
       id: inbound.id,
       quantity: draft.quantity,
+      shelfName: draft.shelfName,
       remark: draft.remark,
     });
     showNotice('草稿已保存');
@@ -317,9 +391,13 @@ async function confirmInboundOrder(inbound: StockInbound) {
   const draft = ensureInboundDraft(inbound);
   draft.busy = true;
   try {
-    await confirmInbound(inbound.id);
-    showNotice('入库单已确认，库存已增加');
-    await Promise.all([loadProducts(), loadInbounds()]);
+    if (!draft.shelfName) {
+      showNotice('请选择上架货架', true);
+      return;
+    }
+    await confirmInbound(inbound.id, draft.shelfName);
+    showNotice(`入库单已确认，已上架到 ${draft.shelfName}`);
+    await Promise.all([loadProducts(), loadLocations(), loadInbounds()]);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '确认失败', true);
   } finally {
@@ -350,6 +428,7 @@ function ensureOutboundDraft(outbound: StockOutbound) {
     outboundDrafts.value[outbound.id] = {
       quantity: outbound.quantity,
       orderNo: outbound.orderNo,
+      shelfName: outbound.shelfName || outboundForm.shelfName,
       busy: false,
     };
   }
@@ -366,6 +445,7 @@ async function loadOutbounds() {
       nextDrafts[outbound.id] = {
         quantity: outbound.quantity,
         orderNo: outbound.orderNo,
+        shelfName: outbound.shelfName || outboundForm.shelfName,
         busy: false,
       };
     }
@@ -402,6 +482,7 @@ async function submitOutbound() {
       productNo: outboundForm.productNo,
       quantity: outboundForm.quantity,
       orderNo: outboundForm.orderNo.trim(),
+      shelfName: outboundForm.shelfName,
     });
     showNotice('出库单已开为草稿');
     await loadOutbounds();
@@ -423,6 +504,7 @@ async function saveOutbound(outbound: StockOutbound) {
       id: outbound.id,
       quantity: draft.quantity,
       orderNo: draft.orderNo,
+      shelfName: draft.shelfName,
     });
     showNotice('草稿已保存');
     await loadOutbounds();
@@ -437,9 +519,13 @@ async function confirmOutboundOrder(outbound: StockOutbound) {
   const draft = ensureOutboundDraft(outbound);
   draft.busy = true;
   try {
-    await confirmOutbound(outbound.id);
-    showNotice('出库单已确认，库存已扣减');
-    await Promise.all([loadProducts(), loadOutbounds()]);
+    if (!draft.shelfName) {
+      showNotice('请选择出库货架', true);
+      return;
+    }
+    await confirmOutbound(outbound.id, draft.shelfName);
+    showNotice(`出库单已确认，已从 ${draft.shelfName} 扣减`);
+    await Promise.all([loadProducts(), loadLocations(), loadOutbounds()]);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '确认失败', true);
   } finally {
@@ -461,6 +547,51 @@ async function voidOutboundOrder(outbound: StockOutbound) {
   }
 }
 
+async function submitTransfer() {
+  if (!transferForm.productNo) {
+    showNotice('请选择要移架的商品', true);
+    return;
+  }
+  if (transferForm.fromShelf === transferForm.toShelf) {
+    showNotice('来源和目标货架不能相同', true);
+    return;
+  }
+  if (!Number.isInteger(transferForm.quantity) || transferForm.quantity < 1) {
+    showNotice('移架件数必须大于 0', true);
+    return;
+  }
+
+  transferBusy.value = true;
+  try {
+    await transferStock({
+      productNo: transferForm.productNo,
+      fromShelf: transferForm.fromShelf,
+      toShelf: transferForm.toShelf,
+      quantity: transferForm.quantity,
+    });
+    showNotice(
+      `已从 ${transferForm.fromShelf} 搬 ${transferForm.quantity} 个到 ${transferForm.toShelf}`,
+    );
+    await Promise.all([loadProducts(), loadLocations()]);
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '移架失败', true);
+  } finally {
+    transferBusy.value = false;
+  }
+}
+
+async function loadShelfContents() {
+  if (!shelfQuery.value) {
+    showNotice('请选择货架', true);
+    return;
+  }
+  try {
+    shelfView.value = await locationsByShelf(shelfQuery.value);
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '查询货架失败', true);
+  }
+}
+
 onMounted(() => {
   void restoreSession();
 });
@@ -471,7 +602,7 @@ onMounted(() => {
     <header class="topbar">
       <div>
         <h1>仓储库存</h1>
-        <p>登录后开入/出库单；出库确认用 Redis 扣库存，防止超卖</p>
+        <p>登录后开入/出库单并指定货架；移架需持锁，各货架之和等于总库存</p>
       </div>
       <div v-if="currentUser" class="user">
         <span>{{ currentUser }}</span>
@@ -537,10 +668,6 @@ onMounted(() => {
             名称
             <input v-model="createForm.name" type="text" placeholder="黑色蓝牙耳机" />
           </label>
-          <label>
-            初始库存
-            <input v-model.number="createForm.quantity" type="number" min="0" />
-          </label>
           <button class="primary" type="submit">创建</button>
         </form>
       </section>
@@ -548,7 +675,12 @@ onMounted(() => {
       <section class="panel">
         <div class="panel__title">
           <h2>商品列表</h2>
-          <button type="button" class="ghost" :disabled="loading" @click="loadProducts">
+          <button
+            type="button"
+            class="ghost"
+            :disabled="loading"
+            @click="Promise.all([loadProducts(), loadLocations()])"
+          >
             {{ loading ? '刷新中…' : '刷新' }}
           </button>
         </div>
@@ -558,7 +690,10 @@ onMounted(() => {
         <div v-for="product in products" :key="productKey(product)" class="product">
           <div class="product__meta">
             <strong>{{ product.name }}</strong>
-            <span>编号 {{ product.productNo }} · 库存 {{ product.quantity }}</span>
+            <span>
+              编号 {{ product.productNo }} · 总计 {{ product.quantity }} ·
+              {{ shelvesText(product.productNo) }}
+            </span>
           </div>
 
           <div class="product__actions">
@@ -589,7 +724,7 @@ onMounted(() => {
 
       <section class="panel">
         <h2>开入库单</h2>
-        <p class="hint">草稿不改库存；确认后才会给商品加数量，且不能再改件数。</p>
+        <p class="hint">草稿不改库存；确认时写入货架，Redis Hash 记下该架件数。</p>
         <form class="form form--row" @submit.prevent="submitInbound">
           <label>
             商品
@@ -601,6 +736,18 @@ onMounted(() => {
                 :value="product.productNo"
               >
                 {{ product.name }}（{{ product.productNo }}）
+              </option>
+            </select>
+          </label>
+          <label>
+            货架
+            <select v-model="inboundForm.shelfName">
+              <option
+                v-for="shelf in shelves"
+                :key="`in-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
               </option>
             </select>
           </label>
@@ -646,6 +793,7 @@ onMounted(() => {
             <span>
               单号 {{ inbound.id }} · {{ inbound.productNo }} ·
               {{ inbound.quantity }} 件
+              <template v-if="inbound.shelfName"> · {{ inbound.shelfName }}</template>
               <template v-if="inbound.remark"> · {{ inbound.remark }}</template>
             </span>
           </div>
@@ -658,6 +806,18 @@ onMounted(() => {
               min="1"
               :disabled="ensureInboundDraft(inbound).busy"
             />
+            <select
+              v-model="ensureInboundDraft(inbound).shelfName"
+              :disabled="ensureInboundDraft(inbound).busy"
+            >
+              <option
+                v-for="shelf in shelves"
+                :key="`in-draft-${inbound.id}-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
+              </option>
+            </select>
             <input
               v-model="ensureInboundDraft(inbound).remark"
               type="text"
@@ -696,7 +856,7 @@ onMounted(() => {
 
       <section class="panel">
         <h2>开出库单</h2>
-        <p class="hint">草稿不扣库存；确认时先抢 Redis 锁，货不够会 409，单子仍是草稿。</p>
+        <p class="hint">确认时从指定货架扣；该架不够不会去别的架偷，单子仍是草稿。</p>
         <form class="form form--row" @submit.prevent="submitOutbound">
           <label>
             商品
@@ -708,6 +868,18 @@ onMounted(() => {
                 :value="product.productNo"
               >
                 {{ product.name }}（{{ product.productNo }}）
+              </option>
+            </select>
+          </label>
+          <label>
+            货架
+            <select v-model="outboundForm.shelfName">
+              <option
+                v-for="shelf in shelves"
+                :key="`out-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
               </option>
             </select>
           </label>
@@ -749,6 +921,7 @@ onMounted(() => {
             <span>
               单号 {{ outbound.id }} · {{ outbound.productNo }} ·
               {{ outbound.quantity }} 件 · {{ outbound.orderNo }}
+              <template v-if="outbound.shelfName"> · {{ outbound.shelfName }}</template>
             </span>
           </div>
 
@@ -760,6 +933,18 @@ onMounted(() => {
               min="1"
               :disabled="ensureOutboundDraft(outbound).busy"
             />
+            <select
+              v-model="ensureOutboundDraft(outbound).shelfName"
+              :disabled="ensureOutboundDraft(outbound).busy"
+            >
+              <option
+                v-for="shelf in shelves"
+                :key="`out-draft-${outbound.id}-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
+              </option>
+            </select>
             <input
               v-model="ensureOutboundDraft(outbound).orderNo"
               type="text"
@@ -792,6 +977,93 @@ onMounted(() => {
           </div>
           <div v-else class="product__actions">
             <span class="readonly">只能查看</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>移架</h2>
+        <p class="hint">
+          同一商品同时只能有一个人搬。抢不到锁或来源架不够都会 409，总数量不变。
+        </p>
+        <form class="form form--row" @submit.prevent="submitTransfer">
+          <label>
+            商品
+            <select v-model="transferForm.productNo">
+              <option disabled value="">请选择商品</option>
+              <option
+                v-for="product in products"
+                :key="`mv-${product.productNo}`"
+                :value="product.productNo"
+              >
+                {{ product.name }}（{{ product.productNo }}）
+              </option>
+            </select>
+          </label>
+          <label>
+            从
+            <select v-model="transferForm.fromShelf">
+              <option
+                v-for="shelf in shelves"
+                :key="`from-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
+              </option>
+            </select>
+          </label>
+          <label>
+            到
+            <select v-model="transferForm.toShelf">
+              <option
+                v-for="shelf in shelves"
+                :key="`to-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
+              </option>
+            </select>
+          </label>
+          <label>
+            件数
+            <input v-model.number="transferForm.quantity" type="number" min="1" />
+          </label>
+          <button class="primary" type="submit" :disabled="transferBusy">
+            {{ transferBusy ? '搬移中…' : '确认移架' }}
+          </button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel__title">
+          <h2>货架上有哪些货</h2>
+          <button type="button" class="ghost" @click="loadShelfContents">查询</button>
+        </div>
+        <form class="form form--row" @submit.prevent="loadShelfContents">
+          <label>
+            货架
+            <select v-model="shelfQuery">
+              <option
+                v-for="shelf in shelves"
+                :key="`q-${shelf.name}`"
+                :value="shelf.name"
+              >
+                {{ shelf.name }}
+              </option>
+            </select>
+          </label>
+        </form>
+        <p v-if="shelfView && !shelfView.items.length" class="empty">
+          {{ shelfView.shelfName }} 上还没有货。
+        </p>
+        <div
+          v-for="item in shelfView?.items ?? []"
+          :key="`${shelfView?.shelfName}-${item.productNo}`"
+          class="product"
+        >
+          <div class="product__meta">
+            <strong>{{ item.productName }}</strong>
+            <span>{{ item.productNo }} · {{ item.quantity }} 件</span>
           </div>
         </div>
       </section>

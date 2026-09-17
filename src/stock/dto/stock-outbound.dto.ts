@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateOutboundDto {
   @IsString()
@@ -12,6 +12,10 @@ export class CreateOutboundDto {
 
   @IsString()
   orderNo!: string;
+
+  @IsOptional()
+  @IsString()
+  shelfName?: string;
 }
 
 export class UpdateOutboundDto {
@@ -28,6 +32,20 @@ export class UpdateOutboundDto {
   @IsOptional()
   @IsString()
   orderNo?: string;
+
+  @IsOptional()
+  @IsString()
+  shelfName?: string;
+}
+
+export class ConfirmOutboundDto {
+  @Type(() => Number)
+  @IsInt()
+  id!: number;
+
+  @IsString()
+  @IsNotEmpty()
+  shelfName!: string;
 }
 
 export class OutboundIdDto {

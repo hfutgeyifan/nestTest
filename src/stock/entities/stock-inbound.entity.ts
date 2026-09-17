@@ -24,6 +24,9 @@ export class StockInbound {
   quantity!: number;
 
   @Column({ default: '' })
+  shelfName!: string;
+
+  @Column({ default: '' })
   remark!: string;
 
   @Column({ default: INBOUND_STATUS.DRAFT })

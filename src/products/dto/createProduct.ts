@@ -24,14 +24,6 @@ export class updateProductNameDto {
     name!: string;
 }
 
-export class updateProductQuantityDto {
-    @IsString()
-    productNo!: string;
-
-    @IsInt()
-    quantity!: number;
-}
-
 export class deleteProductDto {
     @IsString()
     productNo!: string;

@@ -2,27 +2,55 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createClient, type RedisClientType } from 'redis';
 
 /**
- * 原子扣库存。整段脚本在 Redis 里一次跑完，中间不会被别的请求插入。
- * 返回 0 = 失败（key 不存在或库存不够）。
- * 成功返回 remaining+1：扣完剩 0 时不能也回 0，否则 JS 分不清成败。
+ * 从指定货架原子扣库存。Hash key=stock:HEAR-BLACK，field=A区-01。
+ * 只看这一架，不够不会去别的架偷。
+ * 成功返回「该架剩余+1」，失败返回 0。
  */
 const DEDUCT_LUA = `
-local current = tonumber(redis.call('GET', KEYS[1]))
+local current = tonumber(redis.call('HGET', KEYS[1], ARGV[1]))
 if current == nil then
   return 0
 end
-local qty = tonumber(ARGV[1])
+local qty = tonumber(ARGV[2])
 if current < qty then
   return 0
 end
 local remaining = current - qty
-redis.call('SET', KEYS[1], remaining)
+if remaining == 0 then
+  redis.call('HDEL', KEYS[1], ARGV[1])
+else
+  redis.call('HSET', KEYS[1], ARGV[1], remaining)
+end
 return remaining + 1
 `;
 
 /**
- * 只删“自己的锁”。token 对不上说明锁已过期被别人抢走，不能 DEL。
+ * 同一 Hash 内移架：A区-01 减、B区-03 加，中间不会被插入。
+ * 来源架不够返回 0。
  */
+const MOVE_LUA = `
+if ARGV[1] == ARGV[2] then
+  return 0
+end
+local current = tonumber(redis.call('HGET', KEYS[1], ARGV[1]))
+if current == nil then
+  return 0
+end
+local qty = tonumber(ARGV[3])
+if current < qty then
+  return 0
+end
+local fromLeft = current - qty
+if fromLeft == 0 then
+  redis.call('HDEL', KEYS[1], ARGV[1])
+else
+  redis.call('HSET', KEYS[1], ARGV[1], fromLeft)
+end
+local dest = tonumber(redis.call('HGET', KEYS[1], ARGV[2])) or 0
+redis.call('HSET', KEYS[1], ARGV[2], dest + qty)
+return 1
+`;
+
 const UNLOCK_LUA = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   return redis.call('DEL', KEYS[1])
@@ -31,11 +59,12 @@ else
 end
 `;
 
+export type ShelfQty = { shelfName: string; quantity: number };
+
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private client!: RedisClientType;
 
-  // 构造函数不能 await；Nest 会等这个钩子连上再接请求
   async onModuleInit() {
     this.client = createClient({
       socket: {
@@ -52,31 +81,51 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Hash：stock:HEAR-BLACK，field 是货架名 */
   stockKey(productNo: string) {
-    return `stock:product:${productNo}`;
+    return `stock:${productNo}`;
   }
 
   lockKey(productNo: string) {
     return `lock:product:${productNo}`;
   }
 
-  /** 入库确认后覆盖 Redis 库存，和 MySQL 对齐 */
-  async setStock(productNo: string, quantity: number) {
-    await this.client.set(this.stockKey(productNo), String(quantity));
+  async incrShelf(productNo: string, shelfName: string, quantity: number) {
+    await this.client.hIncrBy(this.stockKey(productNo), shelfName, quantity);
   }
 
-  /** 老商品可能还没有 Redis key，出库前用 MySQL 数量补一次 */
-  async ensureStock(productNo: string, dbQuantity: number) {
+  async getHash(productNo: string): Promise<ShelfQty[]> {
+    const raw = await this.client.hGetAll(this.stockKey(productNo));
+    return Object.entries(raw)
+      .map(([shelfName, quantity]) => ({
+        shelfName,
+        quantity: Number(quantity),
+      }))
+      .filter((row) => Number.isFinite(row.quantity) && row.quantity > 0)
+      .sort((a, b) => a.shelfName.localeCompare(b.shelfName, 'zh-CN'));
+  }
+
+  hashTotal(rows: ShelfQty[]) {
+    return rows.reduce((sum, row) => sum + row.quantity, 0);
+  }
+
+  /** 出库/移架前：Hash 不存在才用 MySQL 货位灌进去 */
+  async ensureHash(productNo: string, locations: ShelfQty[]) {
     const exists = await this.client.exists(this.stockKey(productNo));
-    if (!exists) {
-      await this.client.set(this.stockKey(productNo), String(dbQuantity));
+    if (exists) {
+      return;
+    }
+    for (const row of locations) {
+      if (row.quantity > 0) {
+        await this.client.hSet(
+          this.stockKey(productNo),
+          row.shelfName,
+          String(row.quantity),
+        );
+      }
     }
   }
 
-  /**
-   * 抢商品锁。NX=没人持有才写；PX=持锁最长 ttlMs，进程挂了也会自动释放。
-   * 抢不到立刻返回 false，不会在 Redis 里等待。
-   */
   async tryLock(productNo: string, token: string, ttlMs = 8000) {
     const result = await this.client.set(this.lockKey(productNo), token, {
       NX: true,
@@ -92,23 +141,36 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async deduct(
+  async deductFromShelf(
     productNo: string,
+    shelfName: string,
     quantity: number,
-  ): Promise<{ ok: true; remaining: number } | { ok: false }> {
+  ): Promise<{ ok: true; shelfRemaining: number } | { ok: false }> {
     const raw = await this.client.eval(DEDUCT_LUA, {
       keys: [this.stockKey(productNo)],
-      arguments: [String(quantity)],
+      arguments: [shelfName, String(quantity)],
     });
     const coded = Number(raw);
     if (!Number.isFinite(coded) || coded === 0) {
       return { ok: false };
     }
-    return { ok: true, remaining: coded - 1 };
+    return { ok: true, shelfRemaining: coded - 1 };
   }
 
-  /** MySQL 出库失败时，把刚才 Lua 扣掉的数量加回去 */
-  async restore(productNo: string, quantity: number) {
-    await this.client.incrBy(this.stockKey(productNo), quantity);
+  async moveShelf(
+    productNo: string,
+    fromShelf: string,
+    toShelf: string,
+    quantity: number,
+  ): Promise<boolean> {
+    const raw = await this.client.eval(MOVE_LUA, {
+      keys: [this.stockKey(productNo)],
+      arguments: [fromShelf, toShelf, String(quantity)],
+    });
+    return Number(raw) === 1;
+  }
+
+  async restoreShelf(productNo: string, shelfName: string, quantity: number) {
+    await this.client.hIncrBy(this.stockKey(productNo), shelfName, quantity);
   }
 }

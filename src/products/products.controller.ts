@@ -4,7 +4,6 @@ import {
   deleteProductDto,
   findByIdDto,
   updateProductNameDto,
-  updateProductQuantityDto,
 } from './dto/createProduct';
 import { ProductsService } from './products.service';
 import { Product } from './interfaces/product';
@@ -35,16 +34,6 @@ export class ProductsController {
     return await this.productService.updateProductName(
       updateProductNameParams.productNo,
       updateProductNameParams.name,
-    );
-  }
-
-  @Post('updateProductQuantity')
-  async updateProductQuantity(
-    @Body() updateProductQuantityParams: updateProductQuantityDto,
-  ) {
-    return await this.productService.updateProductQuantity(
-      updateProductQuantityParams.productNo,
-      updateProductQuantityParams.quantity,
     );
   }
 

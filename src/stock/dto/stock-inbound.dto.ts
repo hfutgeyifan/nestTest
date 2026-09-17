@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateInboundDto {
   @IsString()
@@ -9,6 +9,10 @@ export class CreateInboundDto {
   @IsInt()
   @Min(1)
   quantity!: number;
+
+  @IsOptional()
+  @IsString()
+  shelfName?: string;
 
   @IsOptional()
   @IsString()
@@ -28,7 +32,21 @@ export class UpdateInboundDto {
 
   @IsOptional()
   @IsString()
+  shelfName?: string;
+
+  @IsOptional()
+  @IsString()
   remark?: string;
+}
+
+export class ConfirmInboundDto {
+  @Type(() => Number)
+  @IsInt()
+  id!: number;
+
+  @IsString()
+  @IsNotEmpty()
+  shelfName!: string;
 }
 
 export class InboundIdDto {
