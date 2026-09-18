@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import {
   CreateProductDto,
   deleteProductDto,
@@ -11,6 +11,11 @@ import { Product } from './interfaces/product';
 @Controller('products')
 export class ProductsController {
   constructor(private productService: ProductsService) {}
+
+  @Get(':id/history')
+  findHistory(@Param('id') id: string) {
+    return this.productService.findHistory(id);
+  }
 
   @Post('getAllProducts')
   async findAll(): Promise<Product[]> {

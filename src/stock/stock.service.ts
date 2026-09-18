@@ -2,6 +2,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -9,6 +10,8 @@ import { randomUUID } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Products } from '../products/entities/products.entity';
 import { ProductsService } from '../products/products.service';
+import { KafkaService } from '../kafka/kafka.service';
+import type { StockChangedEvent } from '../kafka/stock-changed.event';
 import { RedisService } from '../redis/redis.service';
 import {
   ConfirmInboundDto,
@@ -37,6 +40,8 @@ function sleep(ms: number) {
 
 @Injectable()
 export class StockService implements OnModuleInit {
+  private readonly logger = new Logger(StockService.name);
+
   constructor(
     @InjectRepository(StockInbound)
     private inboundRepository: Repository<StockInbound>,
@@ -48,6 +53,7 @@ export class StockService implements OnModuleInit {
     private locationRepository: Repository<ProductLocation>,
     private productsService: ProductsService,
     private redisService: RedisService,
+    private kafkaService: KafkaService,
     private dataSource: DataSource,
   ) {}
 
@@ -181,11 +187,11 @@ export class StockService implements OnModuleInit {
     return await this.inboundRepository.save(inbound);
   }
 
-  async confirm(userId: number, dto: ConfirmInboundDto) {
+  async confirm(userId: number, username: string, dto: ConfirmInboundDto) {
     const shelfName = dto.shelfName.trim();
     await this.assertShelf(shelfName);
 
-    return await this.dataSource.transaction(async (manager) => {
+    const saved = await this.dataSource.transaction(async (manager) => {
       const inbound = await manager.findOne(StockInbound, {
         where: { id: dto.id },
         lock: { mode: 'pessimistic_write' },
@@ -224,6 +230,20 @@ export class StockService implements OnModuleInit {
       inbound.status = INBOUND_STATUS.CONFIRMED;
       return await manager.save(inbound);
     });
+    this.publishStockChanged({
+      eventId: randomUUID(),
+      type: 'inbound',
+      userId,
+      username,
+      productNo: saved.productNo,
+      productName: saved.productName,
+      quantity: saved.quantity,
+      shelfName: saved.shelfName,
+      documentId: saved.id,
+      orderNo: '',
+      occurredAt: new Date().toISOString(),
+    });
+    return saved;
   }
 
   async createOutbound(userId: number, dto: CreateOutboundDto) {
@@ -277,7 +297,11 @@ export class StockService implements OnModuleInit {
     return await this.outboundRepository.save(outbound);
   }
 
-  async confirmOutbound(userId: number, dto: ConfirmOutboundDto) {
+  async confirmOutbound(
+    userId: number,
+    username: string,
+    dto: ConfirmOutboundDto,
+  ) {
     const outbound = await this.getOwnedOutbound(userId, dto.id);
     this.assertOutboundDraft(outbound);
     const shelfName = dto.shelfName.trim();
@@ -311,7 +335,7 @@ export class StockService implements OnModuleInit {
       try {
         const hash = await this.redisService.getHash(outbound.productNo);
         const remaining = this.redisService.hashTotal(hash);
-        return await this.dataSource.transaction(async (manager) => {
+        const saved = await this.dataSource.transaction(async (manager) => {
           const row = await manager.findOne(StockOutbound, {
             where: { id: outbound.id },
             lock: { mode: 'pessimistic_write' },
@@ -337,6 +361,20 @@ export class StockService implements OnModuleInit {
           row.status = OUTBOUND_STATUS.CONFIRMED;
           return await manager.save(row);
         });
+        this.publishStockChanged({
+          eventId: randomUUID(),
+          type: 'outbound',
+          userId,
+          username,
+          productNo: saved.productNo,
+          productName: saved.productName,
+          quantity: -saved.quantity,
+          shelfName: saved.shelfName,
+          documentId: saved.id,
+          orderNo: saved.orderNo,
+          occurredAt: new Date().toISOString(),
+        });
+        return saved;
       } catch (error) {
         await this.redisService.restoreShelf(
           outbound.productNo,
@@ -412,6 +450,15 @@ export class StockService implements OnModuleInit {
     } finally {
       await this.redisService.unlock(product.productNo, token);
     }
+  }
+
+  private publishStockChanged(event: StockChangedEvent) {
+    void this.kafkaService.emitStockChanged(event).catch((error: unknown) => {
+      this.logger.error(
+        `发送 stock.changed 失败 ${event.eventId}`,
+        error instanceof Error ? error.stack : error,
+      );
+    });
   }
 
   private async acquireLock(

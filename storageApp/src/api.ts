@@ -111,6 +111,35 @@ export function updateProductName(productNo: string, name: string) {
   });
 }
 
+export type StockLedger = {
+  id: number;
+  eventId: string;
+  type: 'inbound' | 'outbound';
+  userId: number;
+  username: string;
+  productNo: string;
+  productName: string;
+  quantity: number;
+  shelfName: string;
+  documentId: number;
+  orderNo: string;
+  occurredAt: string;
+};
+
+export type ProductHistory = {
+  productNo: string;
+  productName: string;
+  quantity: number;
+  ledgerTotal: number;
+  items: StockLedger[];
+};
+
+export function getProductHistory(productNo: string) {
+  return request<ProductHistory>(
+    `/products/${encodeURIComponent(productNo)}/history`,
+  );
+}
+
 export function deleteProduct(productNo: string) {
   return request('/products/deleteProduct', {
     method: 'POST',

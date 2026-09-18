@@ -10,6 +10,7 @@ import {
   createProduct,
   deleteProduct,
   getAllProducts,
+  getProductHistory,
   getProfile,
   getToken,
   listInbounds,
@@ -27,6 +28,7 @@ import {
   voidInbound,
   voidOutbound,
   type Product,
+  type ProductHistory,
   type ProductLocations,
   type Shelf,
   type ShelfContents,
@@ -52,6 +54,9 @@ const loading = ref(false);
 const inboundLoading = ref(false);
 const outboundLoading = ref(false);
 const transferBusy = ref(false);
+const history = ref<ProductHistory | null>(null);
+const historyProductNo = ref('');
+const historyLoading = ref(false);
 
 const createForm = reactive({
   productNo: '',
@@ -137,6 +142,9 @@ async function loadProducts() {
     }
     if (!transferForm.productNo && products.value[0]) {
       transferForm.productNo = products.value[0].productNo;
+    }
+    if (!historyProductNo.value && products.value[0]) {
+      historyProductNo.value = products.value[0].productNo;
     }
   } catch (error) {
     showNotice(
@@ -231,6 +239,7 @@ function logout() {
   inbounds.value = [];
   outbounds.value = [];
   shelfView.value = null;
+  history.value = null;
   showNotice('已退出登录');
 }
 
@@ -396,8 +405,12 @@ async function confirmInboundOrder(inbound: StockInbound) {
       return;
     }
     await confirmInbound(inbound.id, draft.shelfName);
-    showNotice(`入库单已确认，已上架到 ${draft.shelfName}`);
+    showNotice(`入库单已确认，库存已变；流水大约 2 秒后出现`);
+    historyProductNo.value = inbound.productNo;
     await Promise.all([loadProducts(), loadLocations(), loadInbounds()]);
+    window.setTimeout(() => {
+      void loadHistory();
+    }, 2000);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '确认失败', true);
   } finally {
@@ -524,8 +537,12 @@ async function confirmOutboundOrder(outbound: StockOutbound) {
       return;
     }
     await confirmOutbound(outbound.id, draft.shelfName);
-    showNotice(`出库单已确认，已从 ${draft.shelfName} 扣减`);
+    showNotice(`出库单已确认，库存已变；流水大约 2 秒后出现`);
+    historyProductNo.value = outbound.productNo;
     await Promise.all([loadProducts(), loadLocations(), loadOutbounds()]);
+    window.setTimeout(() => {
+      void loadHistory();
+    }, 2000);
   } catch (error) {
     showNotice(error instanceof Error ? error.message : '确认失败', true);
   } finally {
@@ -577,6 +594,27 @@ async function submitTransfer() {
     showNotice(error instanceof Error ? error.message : '移架失败', true);
   } finally {
     transferBusy.value = false;
+  }
+}
+
+function historyText(row: ProductHistory['items'][number]) {
+  const signed = row.quantity > 0 ? `+${row.quantity}` : String(row.quantity);
+  const kind = row.type === 'inbound' ? '入库' : '出库';
+  return `${kind} ${signed} · ${row.shelfName} · ${row.username}`;
+}
+
+async function loadHistory() {
+  if (!historyProductNo.value) {
+    showNotice('请选择要查看流水的商品', true);
+    return;
+  }
+  historyLoading.value = true;
+  try {
+    history.value = await getProductHistory(historyProductNo.value);
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : '加载流水失败', true);
+  } finally {
+    historyLoading.value = false;
   }
 }
 
@@ -718,6 +756,55 @@ onMounted(() => {
             >
               删除
             </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__title">
+          <h2>库存流水</h2>
+          <button
+            type="button"
+            class="ghost"
+            :disabled="historyLoading"
+            @click="loadHistory"
+          >
+            {{ historyLoading ? '查询中…' : '查询' }}
+          </button>
+        </div>
+        <p class="hint">
+          确认接口只改库存并丢 Kafka。流水由消费者按 eventId 去重写入，马上查可能还没有。
+        </p>
+        <form class="form form--row" @submit.prevent="loadHistory">
+          <label>
+            商品
+            <select v-model="historyProductNo">
+              <option disabled value="">请选择商品</option>
+              <option
+                v-for="product in products"
+                :key="`his-${product.productNo}`"
+                :value="product.productNo"
+              >
+                {{ product.name }}（{{ product.productNo }}）
+              </option>
+            </select>
+          </label>
+        </form>
+        <p v-if="history" class="hint">
+          当前库存 {{ history.quantity }} · 流水加总 {{ history.ledgerTotal }}
+        </p>
+        <p v-if="history && !history.items.length" class="empty">还没有流水。</p>
+        <div
+          v-for="row in history?.items ?? []"
+          :key="row.eventId"
+          class="product"
+        >
+          <div class="product__meta">
+            <strong>{{ historyText(row) }}</strong>
+            <span>
+              {{ row.occurredAt }}
+              <template v-if="row.orderNo"> · {{ row.orderNo }}</template>
+            </span>
           </div>
         </div>
       </section>

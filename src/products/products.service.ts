@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { Product } from './interfaces/product';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
+import { StockLedgerService } from '../ledger/stock-ledger.service';
 import { Products } from './entities/products.entity';
 
 @Injectable()
@@ -9,6 +10,7 @@ export class ProductsService {
   constructor(
     @InjectRepository(Products)
     private productsRepository: Repository<Products>,
+    private ledgerService: StockLedgerService,
   ) {}
 
   async create(product: Product) {
@@ -27,6 +29,19 @@ export class ProductsService {
 
   async findAll() {
     return await this.productsRepository.find();
+  }
+
+  async findHistory(productNo: string) {
+    const product = await this.findById(productNo);
+    const items = await this.ledgerService.findByProduct(productNo);
+    const ledgerTotal = items.reduce((sum, row) => sum + row.quantity, 0);
+    return {
+      productNo: product.productNo,
+      productName: product.name,
+      quantity: product.quantity,
+      ledgerTotal,
+      items,
+    };
   }
 
   async findById(productNo: string): Promise<Products> {

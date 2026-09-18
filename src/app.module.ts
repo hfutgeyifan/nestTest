@@ -8,11 +8,15 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { StockModule } from './stock/stock.module';
 import { RedisModule } from './redis/redis.module';
+import { LedgerModule } from './ledger/ledger.module';
+import { KafkaModule } from './kafka/kafka.module';
 
 @Module({
   imports: [
     HealthModule,
     RedisModule,
+    LedgerModule,
+    KafkaModule,
     ProductsModule,
     TypeOrmModule.forRoot({
       type: 'mysql',

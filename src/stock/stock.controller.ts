@@ -80,7 +80,7 @@ export class StockController {
   @HttpCode(HttpStatus.OK)
   @Post('inbounds/confirm')
   confirm(@Request() req: RequestWithUser, @Body() dto: ConfirmInboundDto) {
-    return this.stockService.confirm(req.user.sub, dto);
+    return this.stockService.confirm(req.user.sub, req.user.username, dto);
   }
 
   @HttpCode(HttpStatus.OK)
@@ -118,7 +118,11 @@ export class StockController {
     @Request() req: RequestWithUser,
     @Body() dto: ConfirmOutboundDto,
   ) {
-    return this.stockService.confirmOutbound(req.user.sub, dto);
+    return this.stockService.confirmOutbound(
+      req.user.sub,
+      req.user.username,
+      dto,
+    );
   }
 
   @HttpCode(HttpStatus.OK)
